@@ -7,7 +7,7 @@
 #include "Mqtt.h"
 #include "Network.h"
 
-static const char* resetReasonName() {
+const char* resetReasonName() {
     switch (esp_reset_reason()) {
         case ESP_RST_POWERON: return "power-on";
         case ESP_RST_SW: return "software restart";
@@ -35,6 +35,7 @@ std::string statusJson(const cc::Snapshot& snapshot) {
     sys["freeHeap"] = ESP.getFreeHeap();
     sys["minFreeHeap"] = ESP.getMinFreeHeap();
     sys["configSource"] = app.configSource();
+    sys["configVersion"] = app.configVersion();
     sys["clockSet"] = app.clockValid();
     sys["mqttConnected"] = mqtt.connected();
     network.toJson(sys["wifi"].to<JsonObject>());

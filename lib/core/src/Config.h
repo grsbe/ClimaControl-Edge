@@ -72,6 +72,17 @@ struct AlarmConfig {
     uint32_t delayS = 300;  // must be out of range this long before the alarm fires
 };
 
+// Web/HTTP logins. Operators may switch outputs and change setpoints (see onlySetpointsChanged);
+// admins may change everything, including pins, users, firmware and reboot.
+enum class Role { Admin, Operator };
+const char* roleName(Role r);
+
+struct WebUser {
+    std::string name;
+    std::string password;
+    Role role = Role::Admin;
+};
+
 struct Config {
     std::string deviceName = "climacontrol";
 
@@ -84,8 +95,7 @@ struct Config {
     } wifi;
 
     struct {
-        std::string user = "admin";
-        std::string password = CC_DEFAULT_WEB_PASSWORD;
+        std::vector<WebUser> users = {WebUser{"admin", CC_DEFAULT_WEB_PASSWORD, Role::Admin}};
     } web;
 
     struct {
@@ -132,6 +142,18 @@ bool parseConfig(const std::string& json, Config& cfg, std::vector<std::string>&
 std::vector<std::string> validateConfig(const Config& cfg, Chip chip);
 
 std::string configToJson(const Config& cfg, bool includeSecrets);
+
+// The user with this name and password, or nullptr.
+const WebUser* findUser(const Config& cfg, const std::string& name, const std::string& password);
+
+// True if `after` differs from `before` only in setpoints: rule thresholds, levels, time windows,
+// cycle times, linear ranges, minOnS/minOffS, and alarm limits/delays. Everything else (pins, rule
+// types, signals, maxOnS, users, network, ...) must be identical. Used for the operator role.
+bool onlySetpointsChanged(const Config& before, const Config& after);
+
+// Human-readable list of differences, e.g. "outputs[humidifier].rules[0].on: 85 -> 83".
+// Passwords are never shown, only reported as changed.
+std::vector<std::string> describeChanges(const Config& before, const Config& after);
 
 // Splits "chamber.co2" into group and quantity.
 bool parseSignalName(const std::string& name, std::string& group, Quantity& q);

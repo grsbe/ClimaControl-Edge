@@ -1,0 +1,113 @@
+# Alert rules, evaluated by Grafana every 30 s. Use a single $ in templates ($labels, $values):
+# Grafana does NOT expand environment variables in these annotation texts.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: climacontrol
+    folder: ClimaControl
+    interval: 30s
+    rules:
+      # No status message for 90 s, for 1 more minute: controller off, WiFi down, or broker/collector down.
+      - uid: cc-no-data
+        title: Controller sends no data
+        condition: C
+        for: 1m
+        noDataState: Alerting       # never received anything: also an alarm
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "No data from the controller for {{ printf \"%.0f\" $values.B.Value }} s. Check power, WiFi and the server."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: influxdb
+            model:
+              refId: A
+              query: |
+                from(bucket: "climacontrol")
+                  |> range(start: -30d)
+                  |> filter(fn: (r) => r._measurement == "system" and r._field == "uptime_s")
+                  |> last()
+                  |> map(fn: (r) => ({_time: now(), _value: float(v: uint(v: now()) - uint(v: r._time)) / 1000000000.0}))
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions: [{ evaluator: { type: gt, params: [90] } }]
+
+      # One alert per critical alarm code reported by the controller (sensor signal lost, output in
+      # failsafe, max-on tripped, configured limits such as humidity < 75 %).
+      - uid: cc-critical-alarm
+        title: Critical alarm
+        condition: C
+        for: 1m
+        noDataState: OK             # no alarms = no data = fine
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.code }}"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: influxdb
+            model:
+              refId: A
+              query: |
+                from(bucket: "climacontrol")
+                  |> range(start: -1m)
+                  |> filter(fn: (r) => r._measurement == "alarm" and r._field == "critical" and r._value == true)
+                  |> last()
+                  |> map(fn: (r) => ({r with _value: 1.0}))
+                  |> keep(columns: ["_time", "_value", "code"])
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      # Warnings (one sensor of several failed, sensors disagree), after 5 minutes.
+      - uid: cc-warning
+        title: Warning
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.code }}"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: influxdb
+            model:
+              refId: A
+              query: |
+                from(bucket: "climacontrol")
+                  |> range(start: -1m)
+                  |> filter(fn: (r) => r._measurement == "alarm" and r._field == "critical" and r._value == false)
+                  |> last()
+                  |> map(fn: (r) => ({r with _value: 1.0}))
+                  |> keep(columns: ["_time", "_value", "code"])
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions: [{ evaluator: { type: gt, params: [0] } }]

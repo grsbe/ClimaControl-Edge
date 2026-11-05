@@ -6,10 +6,15 @@
 
 #include <ctime>
 
+#include "StatusJson.h"
+
 static const char* TAG = "app";
 static const char* kConfigPath = "/config.json";
 static const char* kBackupPath = "/config.bak.json";
 static const char* kTempPath = "/config.tmp.json";
+static const char* kEventsPath = "/events.log";         // one JSON event per line, appended
+static const char* kEventsTempPath = "/events.tmp";
+static const size_t kEventsFileMax = 48 * 1024;         // rewritten with the last 100 events beyond this
 static const uint32_t kTickMs = 1000;
 static const uint32_t kWatchdogS = 15;
 static const time_t kMinValidEpoch = 1700000000;  // anything earlier means the clock was never set
@@ -85,11 +90,73 @@ bool App::saveConfig(const cc::Config& cfg) {
     return LittleFS.rename(kTempPath, kConfigPath);
 }
 
+// ---------- change log storage ----------
+
+static int64_t nowEpoch() {
+    const time_t t = time(nullptr);
+    return t > kMinValidEpoch ? static_cast<int64_t>(t) : 0;
+}
+
+void App::loadEvents() {
+    File f = LittleFS.open(kEventsPath, "r");
+    if (!f) return;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        cc::Event e;
+        if (cc::eventFromJson(line.c_str(), e)) events_.restore(e);
+    }
+    f.close();
+}
+
+// Appends one line. When the file grows too large it is rewritten with the events still in memory
+// (temp file + rename, so a power cut cannot leave it half-written).
+void App::persistEvent(const cc::Event& e) {
+    File f = LittleFS.open(kEventsPath, "a");
+    if (!f) return;
+    const std::string line = cc::eventToJson(e) + "\n";
+    f.write(reinterpret_cast<const uint8_t*>(line.data()), line.size());
+    const size_t size = f.size();
+    f.close();
+    if (size <= kEventsFileMax) return;
+    File t = LittleFS.open(kEventsTempPath, "w");
+    if (!t) return;
+    for (const cc::Event& ev : events_.all()) {
+        const std::string l = cc::eventToJson(ev) + "\n";
+        t.write(reinterpret_cast<const uint8_t*>(l.data()), l.size());
+    }
+    t.close();
+    LittleFS.remove(kEventsPath);
+    LittleFS.rename(kEventsTempPath, kEventsPath);
+}
+
+void App::logEvent(const cc::Actor& who, const std::string& action, const std::string& detail) {
+    Lock lock(mutex_);
+    const cc::Event& e = events_.add(who, action, detail, nowEpoch(), millis() / 1000);
+    ESP_LOGI(TAG, "event %u: %s %s/%s: %s", (unsigned)e.seq, e.action.c_str(), e.source.c_str(), e.user.c_str(),
+             e.detail.c_str());
+    persistEvent(e);
+}
+
+std::vector<cc::Event> App::events() {
+    Lock lock(mutex_);
+    return std::vector<cc::Event>(events_.all().begin(), events_.all().end());
+}
+
+std::vector<cc::Event> App::eventsSince(uint32_t seq) {
+    Lock lock(mutex_);
+    return events_.since(seq);
+}
+
 // ---------- startup ----------
 
 void App::begin() {
     mutex_ = xSemaphoreCreateMutex();
     loadConfig();
+    loadEvents();
+    bootEventSeq_ = events_.lastSeq() + 1;
+    logEvent({"system", "", ""}, "boot",
+             std::string("firmware " FIRMWARE_VERSION ", reset reason: ") + resetReasonName() + ", config from " +
+                 configSource_);
     // Until this point the output pins float; the SSR board needs pull-downs to stay off.
     outputs_.configure(config_);
     ESP_LOGI(TAG, "config from %s, %u sensors, %u outputs", configSource_, (unsigned)config_.sensors.size(),
@@ -206,10 +273,9 @@ cc::Snapshot App::snapshot() {
     return snapshot_;
 }
 
-void App::credentials(std::string& user, std::string& password) {
+std::vector<cc::WebUser> App::users() {
     Lock lock(mutex_);
-    user = config_.web.user;
-    password = config_.web.password;
+    return config_.web.users;
 }
 
 static bool needsReboot(const cc::Config& a, const cc::Config& b) {
@@ -220,12 +286,29 @@ static bool needsReboot(const cc::Config& a, const cc::Config& b) {
            a.mqtt.baseTopic != b.mqtt.baseTopic || a.time.tz != b.time.tz || a.time.ntpServer != b.time.ntpServer;
 }
 
-bool App::updateConfig(const std::string& json, std::vector<std::string>& errors, bool& rebootRequired) {
-    const cc::Config current = config();
+bool App::updateConfig(const std::string& json, const cc::Actor& who, cc::Role role, uint32_t expectedVersion,
+                       std::vector<std::string>& errors, std::vector<std::string>& changes, bool& rebootRequired) {
+    cc::Config current;
+    uint32_t version;
+    {
+        Lock lock(mutex_);
+        current = config_;
+        version = configVersion_;
+    }
+    if (expectedVersion != 0 && expectedVersion != version) {
+        errors.push_back("the configuration was changed in the meantime (by someone else?). Reload and try again.");
+        return false;
+    }
     cc::Config next = current;
     if (!cc::parseConfig(json, next, errors)) return false;
     errors = cc::validateConfig(next, kChip);
     if (!errors.empty()) return false;
+    if (role != cc::Role::Admin && !cc::onlySetpointsChanged(current, next)) {
+        errors.push_back("operators may only change setpoints (thresholds, schedules, cycle times, alarm limits)");
+        return false;
+    }
+    changes = cc::describeChanges(current, next);
+    if (changes.empty()) return true;  // nothing to store or log
     if (!saveConfig(next)) {
         errors.push_back("could not write the config to flash");
         return false;
@@ -239,24 +322,32 @@ bool App::updateConfig(const std::string& json, std::vector<std::string>& errors
         configSource_ = "flash";
     }
     xTaskNotifyGive(task_);
+    std::string detail;
+    for (const std::string& c : changes) detail += (detail.empty() ? "" : "\n") + c;
+    logEvent(who, "config", detail);
     return true;
 }
 
 bool App::setOutput(const std::string& name, const std::string& mode, float level, uint32_t minutes,
-                    std::string& error) {
+                    const cc::Actor& who, std::string& error) {
     Command c{name, true, 0, minutes * 60};
+    std::string what;
     if (mode == "auto") {
         c.manual = false;
+        what = "automatic";
     } else if (mode == "on") {
         c.level = 1;
+        what = "on";
     } else if (mode == "off") {
         c.level = 0;
+        what = "off";
     } else if (mode == "level") {
         if (!(level >= 0 && level <= 1)) {
             error = "level must be between 0 and 1";
             return false;
         }
         c.level = level;
+        what = std::to_string(static_cast<int>(level * 100 + 0.5f)) + " %";
     } else {
         error = "mode must be auto, on, off or level";
         return false;
@@ -272,14 +363,22 @@ bool App::setOutput(const std::string& name, const std::string& mode, float leve
         pending_.push_back(c);
     }
     xTaskNotifyGive(task_);
+    if (c.manual) what += minutes ? " for " + std::to_string(minutes) + " min" : " (default override time)";
+    logEvent(who, "output", name + ": " + what);
     return true;
 }
 
-void App::setClock(int64_t epoch) {
+void App::setClock(int64_t epoch, const cc::Actor& who) {
     if (epoch <= kMinValidEpoch) return;
+    const int64_t before = nowEpoch();
     timeval tv = {static_cast<time_t>(epoch), 0};
     settimeofday(&tv, nullptr);
-    ESP_LOGI(TAG, "clock set manually");
+    logEvent(who, "clock", before ? "clock corrected by " + std::to_string(epoch - before) + " s" : "clock set");
+}
+
+void App::requestReboot(const cc::Actor& who) {
+    logEvent(who, "reboot", "reboot requested");
+    rebootAtMs_ = millis() + 1000;
 }
 
 bool App::clockValid() { return time(nullptr) > kMinValidEpoch; }

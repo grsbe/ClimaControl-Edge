@@ -1,0 +1,13 @@
+# Which alert goes to which contact point, and how often reminders are sent.
+apiVersion: 1
+policies:
+  - orgId: 1
+    receiver: ntfy-normal          # default: warnings
+    group_by: [alertname, code]    # one notification per alert type and alarm code
+    group_wait: 30s                # collect alerts that start together for 30 s
+    group_interval: 5m
+    repeat_interval: 4h            # remind every 4 h while the problem lasts
+    routes:
+      - receiver: ntfy-urgent
+        object_matchers:
+          - [severity, "=", critical]

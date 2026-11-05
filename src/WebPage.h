@@ -10,8 +10,8 @@ static const char kWebPage[] PROGMEM = R"HTML(<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClimaControl</title>
 <style>
-:root{--bg:#f4f5f2;--card:#fff;--fg:#1d211c;--muted:#6b7268;--line:#dfe2dc;--accent:#3b7a3f;--warn:#b7791f;--bad:#c53030;--on:#2f855a}
-@media (prefers-color-scheme:dark){:root{--bg:#151816;--card:#1f2420;--fg:#e8ebe6;--muted:#9aa396;--line:#333a33;--accent:#7cc47f;--warn:#e0a840;--bad:#f07070;--on:#68d391}}
+:root{--bg:#f4f5f2;--card:#fff;--fg:#1d211c;--muted:#6b7268;--line:#dfe2dc;--accent:#16a34a;--warn:#d97706;--bad:#dc2626;--on:#16a34a}
+@media (prefers-color-scheme:dark){:root{--bg:#151816;--card:#1f2420;--fg:#e8ebe6;--muted:#9aa396;--line:#333a33;--accent:#22c55e;--warn:#f59e0b;--bad:#f87171;--on:#22c55e}}
 *{box-sizing:border-box}body{margin:0;font:15px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
 header{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:1}
 header h1{font-size:17px;margin:0;flex:1}#conn{font-size:13px;color:var(--muted)}
@@ -36,14 +36,16 @@ button.b:hover{border-color:var(--accent)}button.primary{background:var(--accent
 select,input{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 textarea{width:100%;height:60vh;font:13px/1.4 ui-monospace,monospace;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
 #msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:8px;display:none;max-width:90vw;white-space:pre-wrap}
+.sp{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0}.sp input{width:76px}.sp input[type=time]{width:auto}.sp .lbl{min-width:120px;color:var(--muted);font-size:13px}
+.card+.card{margin-top:10px}td.detail{white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace}
 .scroll{overflow-x:auto}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0}dt{color:var(--muted)}
 </style>
 </head>
 <body>
-<header><h1 id="title">ClimaControl</h1><span id="conn">connecting...</span></header>
+<header><h1 id="title">ClimaControl</h1><span id="who" class="sub"></span><span id="conn">connecting...</span></header>
 <nav id="tabs">
 <button data-tab="overview" class="active">Overview</button><button data-tab="outputs">Outputs</button>
-<button data-tab="sensors">Sensors</button><button data-tab="config">Configuration</button><button data-tab="system">System</button>
+<button data-tab="sensors">Sensors</button><button data-tab="setpoints">Setpoints</button><button data-tab="history">History</button><button data-tab="config">Configuration</button><button data-tab="system">System</button>
 </nav>
 <main>
 <section id="overview" class="active"><div id="alarms"></div><div id="groups"></div></section>
@@ -53,8 +55,19 @@ textarea{width:100%;height:60vh;font:13px/1.4 ui-monospace,monospace;padding:10p
 <div class="scroll"><table><thead><tr><th>Output</th><th>State</th><th>Mode</th><th>Why</th><th></th></tr></thead><tbody id="outTable"></tbody></table></div>
 </section>
 <section id="sensors"><div class="scroll"><table><thead><tr><th>Sensor</th><th>Status</th><th>Values</th></tr></thead><tbody id="sensorTable"></tbody></table></div></section>
+<section id="setpoints">
+<p class="sub">Thresholds, schedules and alarm limits. Changes are checked, stored, and recorded in the History with your name.
+Fields marked admin can only be changed by an admin.</p>
+<p class="btns"><button class="b" id="spLoad">Reload</button><button class="b primary" id="spSave">Save</button></p>
+<div id="spForm"><p class="sub">Loading...</p></div>
+</section>
+<section id="history">
+<p class="sub">Every change made through this page or MQTT: who, when, from where, and what changed. The last 100 entries are kept on the controller.</p>
+<p class="btns"><button class="b" id="evLoad">Reload</button></p>
+<div class="scroll"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody id="evTable"></tbody></table></div>
+</section>
 <section id="config">
-<p class="sub">Edit the JSON and save. It is checked before it is stored; WiFi/MQTT changes need a reboot. Passwords shown as ******** stay unchanged.</p>
+<p class="sub">Edit the JSON and save. It is checked before it is stored; WiFi/MQTT changes need a reboot. Passwords shown as ******** stay unchanged. Logins are in <b>web.users</b> (role admin or operator).</p>
 <p class="btns"><button class="b" id="cfgLoad">Reload</button><button class="b primary" id="cfgSave">Save</button></p>
 <textarea id="cfgText" spellcheck="false"></textarea>
 </section>
@@ -84,6 +97,8 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button,section').forEach(e=>e.classList.remove('active'));
   b.classList.add('active');$('#'+b.dataset.tab).classList.add('active');
   if(b.dataset.tab==='config'&&!$('#cfgText').value)loadConfig();
+  if(b.dataset.tab==='setpoints')loadSetpoints();
+  if(b.dataset.tab==='history')loadEvents();
 });
 function fmt(v,q){if(v==null)return '–';return q==='co2'||q==='gas'?Math.round(v):v.toFixed(1)}
 function renderOverview(){
@@ -123,7 +138,7 @@ function renderSystem(){
   ['Last restart',y.resetReason],['Clock',S.epoch?new Date(S.epoch*1000).toLocaleString():'NOT SET (schedules run in failsafe)'],
   ['Access point',w.ap?`${w.ap.ssid} · ${w.ap.ip} · ${w.ap.clients} clients`:'off'],
   ['Farm WiFi',w.sta?(w.sta.connected?`${w.sta.ssid} · ${w.sta.ip} · ${w.sta.rssi} dBm`:`${w.sta.ssid} · not connected`):'not configured'],
-  ['MQTT',y.mqttConnected?'connected':'not connected'],['Config',y.configSource],['Sensors',S.simulated?'SIMULATED':'real'],
+  ['MQTT',y.mqttConnected?'connected':'not connected'],['Config',y.configSource+' · version '+y.configVersion],['Sensors',S.simulated?'SIMULATED':'real'],
   ['Free memory',Math.round(y.freeHeap/1024)+' kB (min '+Math.round(y.minFreeHeap/1024)+' kB)']];
   $('#sysInfo').innerHTML=rows.map(([k,v])=>`<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
 }
@@ -136,11 +151,15 @@ async function refresh(){
     renderOverview();renderOutputs();renderSensors();renderSystem();
   }catch(e){$('#conn').innerHTML='<span class="bad">connection lost</span>'}
 }
-async function loadConfig(){const r=await fetch('/api/config',{cache:'no-store'});$('#cfgText').value=JSON.stringify(await r.json(),null,2)}
+let CFG=null,CFGV=0,ME=null;
+async function loadCfg(){const r=await fetch('/api/config',{cache:'no-store'});CFGV=+r.headers.get('X-Config-Version')||0;CFG=await r.json();return CFG}
+async function me(){if(ME)return ME;const r=await fetch('/api/me',{cache:'no-store'});if(!r.ok)return null;ME=await r.json();
+  $('#who').textContent=ME.user+' ('+ME.role+') · ';return ME}
+async function loadConfig(){await loadCfg();$('#cfgText').value=JSON.stringify(CFG,null,2)}
 $('#cfgLoad').onclick=loadConfig;
 $('#cfgSave').onclick=async()=>{
   let txt=$('#cfgText').value;try{JSON.parse(txt)}catch(e){return toast('Not valid JSON: '+e.message,6000)}
-  const j=await post('/api/config',txt,true);if(j.ok&&!j.rebootRequired)toast('Saved and active.');
+  const j=await post('/api/config?version='+CFGV,txt,true);if(j.ok){if(!j.rebootRequired)toast('Saved and active:\n'+(j.notes||[]).join('\n'),6000);loadConfig()}
 };
 $('#setClock').onclick=()=>post('/api/time',new URLSearchParams({epoch:Math.floor(Date.now()/1000)})).then(j=>j.ok&&toast('Clock set.'));
 $('#reboot').onclick=()=>confirm('Reboot the controller? Outputs go to their safe state for a few seconds.')&&post('/api/reboot');
@@ -149,6 +168,55 @@ $('#fwUpload').onclick=async()=>{
   if(!confirm('Install '+f.name+'? The controller reboots afterwards.'))return;
   const fd=new FormData();fd.append('firmware',f,f.name);toast('Uploading...',60000);await post('/update',fd);
 };
+// ----- setpoints -----
+// Each input has data-k (path in the config, e.g. "outputs.1.rules.0.on") and data-f (stored = shown * f).
+const unitOf=sig=>UNITS[(sig||'').split('.')[1]]||'';
+function num(k,v,f=1,dis=false,ph=''){return `<input type="number" step="any" data-k="${k}" data-f="${f}" value="${v==null?'':+(v/f).toFixed(3)}" placeholder="${ph}"${dis?' disabled title="admin only"':''}>`}
+function tim(k,v){return `<input type="time" data-k="${k}" data-t="1" value="${esc(v)}">`}
+function renderSetpoints(){
+  const admin=ME&&ME.role==='admin';let h='';
+  CFG.outputs.forEach((o,i)=>{
+    let rows='';
+    o.rules.forEach((r,j)=>{const k=`outputs.${i}.rules.${j}`,u=unitOf(r.signal);
+      if(r.type==='above')rows+=`<div class="sp"><span class="lbl">${esc(r.signal)}</span>on at ≥ ${num(k+'.on',r.on)} off at ≤ ${num(k+'.off',r.off)} ${u}</div>`;
+      else if(r.type==='below')rows+=`<div class="sp"><span class="lbl">${esc(r.signal)}</span>on at ≤ ${num(k+'.on',r.on)} off at ≥ ${num(k+'.off',r.off)} ${u}</div>`;
+      else if(r.type==='schedule')r.windows.forEach((w,n)=>rows+=`<div class="sp"><span class="lbl">schedule</span>on from ${tim(k+`.windows.${n}.from`,w.from)} to ${tim(k+`.windows.${n}.to`,w.to)}</div>`);
+      else if(r.type==='cycle')rows+=`<div class="sp"><span class="lbl">cycle</span>on for ${num(k+'.onS',r.onS,60)} min every ${num(k+'.periodS',r.periodS,60)} min</div>`;
+      else if(r.type==='linear')rows+=`<div class="sp"><span class="lbl">${esc(r.signal)}</span>${num(k+'.in.0',r.in[0])} – ${num(k+'.in.1',r.in[1])} ${u} → ${num(k+'.out.0',r.out[0],0.01)} – ${num(k+'.out.1',r.out[1],0.01)} %</div>`;
+      if(o.kind==='pwm'&&r.type!=='linear')rows+=`<div class="sp"><span class="lbl"></span>level ${num(k+'.level',r.level,0.01)} %</div>`;
+    });
+    if(!o.rules.length)rows='<div class="sub">No rules: manual only.</div>';
+    rows+=`<div class="sp"><span class="lbl">timing</span>min on ${num(`outputs.${i}.minOnS`,o.minOnS)} s, min off ${num(`outputs.${i}.minOffS`,o.minOffS)} s,
+      max on ${num(`outputs.${i}.maxOnS`,o.maxOnS,60,!admin,'off')} min, then pause ${num(`outputs.${i}.cooldownS`,o.cooldownS,60,!admin)} min <span class="sub">(max on/pause: admin)</span></div>`;
+    h+=`<div class="card"><h3>${esc(o.label||o.name)} · ${esc(o.name)}</h3>${rows}</div>`;
+  });
+  h+='<h2>Alarm limits</h2><div class="card">'+(CFG.alarms.map((a,i)=>`<div class="sp"><span class="lbl">${esc(a.signal)}</span>alarm below ${num(`alarms.${i}.min`,a.min,1,false,'none')} or above ${num(`alarms.${i}.max`,a.max,1,false,'none')} ${unitOf(a.signal)} for ${num(`alarms.${i}.delayS`,a.delayS,60)} min</div>`).join('')||'<div class="sub">No alarm limits.</div>')+'</div>';
+  $('#spForm').innerHTML=h;
+}
+async function loadSetpoints(){await me();await loadCfg();renderSetpoints()}
+$('#spLoad').onclick=loadSetpoints;
+$('#spSave').onclick=async()=>{
+  const c=JSON.parse(JSON.stringify(CFG));
+  for(const el of document.querySelectorAll('#spForm input[data-k]')){
+    if(el.disabled)continue;
+    const path=el.dataset.k.split('.'),last=path.pop();let o=c;for(const p of path)o=o[p];
+    if(el.dataset.t){o[last]=el.value;continue}
+    if(el.value===''){if(path[0]==='alarms')delete o[last];continue}
+    o[last]=Math.round(parseFloat(el.value)*parseFloat(el.dataset.f)*1000)/1000;
+  }
+  const j=await post('/api/config?version='+CFGV,JSON.stringify({outputs:c.outputs,alarms:c.alarms}),true);
+  if(j.ok){toast('Saved:\n'+(j.notes||[]).join('\n'),8000);loadSetpoints()}
+};
+// ----- history -----
+function upt(s){return Math.floor(s/86400)+'d '+new Date(s*1000).toISOString().substr(11,8)}
+async function loadEvents(){
+  await me();const r=await fetch('/api/events',{cache:'no-store'});if(!r.ok)return toast('Login needed to see the history');
+  const ev=await r.json();
+  $('#evTable').innerHTML=ev.map(e=>`<tr><td>${e.epoch?new Date(e.epoch*1000).toLocaleString():'clock not set<div class="sub">uptime '+upt(e.uptimeS)+'</div>'}</td>
+  <td><b>${esc(e.user||(e.source==='system'?'system':'?'))}</b><div class="sub">${esc(e.source)}${e.client?' · '+esc(e.client):''}</div></td>
+  <td class="${e.action==='login-failed'?'bad':''}">${esc(e.action)}</td><td class="detail">${esc(e.detail)}</td></tr>`).join('')||'<tr><td colspan="4" class="sub">No entries.</td></tr>';
+}
+$('#evLoad').onclick=loadEvents;
 refresh();setInterval(refresh,2000);
 </script>
 </body>

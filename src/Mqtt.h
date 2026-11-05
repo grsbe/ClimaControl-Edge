@@ -7,11 +7,13 @@
 //   <base>/signal/<name>     single values, e.g. <base>/signal/chamber.co2 = 812.0 (retained)
 //   <base>/alarms            JSON array of active alarms, on change (retained)
 //   <base>/config            configuration without passwords, on change (retained)
-//   <base>/result            answer to a command: {"ok": true} or {"ok": false, "errors": [...]}
+//   <base>/result            answer to a command: {"ok": true, "notes": [...]} or {"ok": false, "errors": [...]}
+//   <base>/event             change log entry (JSON), one message per entry, not retained
 //
 // Commands to the device (do NOT publish them retained, they would be re-run on every reconnect):
-//   <base>/cmd/output/<name> "auto" | "on" | "off" | "0.5" | {"mode": "on", "minutes": 30}
-//   <base>/cmd/config        JSON, merged into the current config (same as the web UI)
+//   <base>/cmd/output/<name> "auto" | "on" | "off" | "0.5" | {"mode": "on", "minutes": 30, "by": "anna"}
+//   <base>/cmd/config        JSON, merged into the current config (same as the web UI); optional "by"
+//                            ("by" names the sender in the change log)
 //   <base>/cmd/reboot        "reboot"
 
 #include <PubSubClient.h>
@@ -43,6 +45,7 @@ class Mqtt {
     uint32_t lastAttemptMs_ = 0;
     uint32_t lastPublishMs_ = 0;
     uint32_t publishedConfigVersion_ = 0;
+    uint32_t publishedEventSeq_ = 0;
     std::string publishedAlarms_;
 };
 

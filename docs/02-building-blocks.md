@@ -437,12 +437,15 @@ between the network side and the control side.
 | `configVersion()` | counter that increases on every change (MQTT uses it to republish the config) |
 | `configSource()` | `"flash"`, `"backup"` or `"defaults"` |
 | `snapshot()` | copy of the latest snapshot |
-| `credentials(user, pw)` | web login |
-| `updateConfig(json, errors, rebootRequired)` | overlay → validate → save to flash → activate. `rebootRequired` is set when device name, WiFi, MQTT or time settings changed, because those are only read at startup. |
-| `setOutput(name, mode, level, minutes, error)` | mode `auto`/`on`/`off`/`level`; queues a command; `minutes = 0` means the default timeout |
-| `setClock(epoch)` | sets the system clock (only values after Nov 2023 are accepted) |
+| `users()` | copy of the web logins |
+| `updateConfig(json, who, role, expectedVersion, errors, changes, rebootRequired)` | overlay → validate → role check (operators: `onlySetpointsChanged`) → save to flash → activate → log. `expectedVersion` ≠ 0 refuses the change if the config changed in the meantime. `changes` receives the readable differences. `rebootRequired` is set when device name, WiFi, MQTT or time settings changed, because those are only read at startup. |
+| `setOutput(name, mode, level, minutes, who, error)` | mode `auto`/`on`/`off`/`level`; queues a command and logs it; `minutes = 0` means the default timeout |
+| `setClock(epoch, who)` | sets the system clock (only values after Nov 2023 are accepted) and logs it |
 | `clockValid()` | true if the time is after 2023-11-14 (epoch 1700000000), i.e. set by NTP or by hand |
-| `requestReboot()` / `rebootDue()` | reboot one second later, so the HTTP/MQTT answer still gets out |
+| `requestReboot(who)` / `rebootDue()` | logs, then reboots one second later, so the HTTP/MQTT answer still gets out |
+| `logEvent(who, action, detail)`, `events()`, `eventsSince(seq)` | the change log, see [11.5](#115-change-log) |
+
+`who` is a `cc::Actor`: channel (`web`, `mqtt`, `system`), user name and client IP address.
 
 All of these take a FreeRTOS mutex (`Lock` is a small RAII helper). Commands and config changes are put
 in a queue/flag and the control task is woken with `xTaskNotifyGive`, so they take effect within
@@ -490,6 +493,37 @@ loop forever:
 `esp_task_wdt_init(15, true)` (core 2.x) or `esp_task_wdt_reconfigure` (core 3.x). The control task and
 the Arduino loop task both register and must reset it at least every 15 s, or the chip panics and
 restarts. After the restart `resetReason` in the status shows `watchdog`.
+
+### 11.5 Change log
+
+**Files:** `lib/core/src/Events.h`, `Events.cpp` (model, tested), `src/App.cpp` (storage)
+
+Every change through the web page or MQTT is recorded: who, when, through which channel, and what
+exactly changed.
+
+| Field | Meaning |
+|-------|---------|
+| `seq` | running number, never reused, also across restarts |
+| `epoch` / `uptimeS` | time of the change (`epoch` is `null` if the clock was not set) |
+| `source` | `web`, `mqtt` or `system` |
+| `user` | web login name; for MQTT the optional `"by"` from the command; empty for system |
+| `client` | IP address of the web client |
+| `action` | `boot`, `output`, `config`, `clock`, `reboot`, `firmware`, `login-failed` |
+| `detail` | e.g. `humidifier: on for 60 min`, or one line per config change (`outputs[humidifier].rules[0].on: 85 -> 84`); at most 800 characters |
+
+- **Config changes** are described by `describeChanges()` (`Config.cpp`): it compares the old and new
+  config field by field, labelling list entries by their name (`outputs[humidifier]`). Passwords only
+  appear as `...password: changed`. A save without differences is neither stored nor logged.
+- **Storage:** the last 100 entries stay in RAM, and every entry is appended as one JSON line to
+  `/events.log` in flash. Beyond 48 KB the file is rewritten (temp file + rename) with the last 100
+  entries. After a restart the log is read back and numbering continues.
+- **Reading:** web page tab *History*, `GET /api/events` (login), MQTT topic `<base>/event` (every
+  entry from the current run, including those made while MQTT was disconnected), and on the server
+  the Grafana table *Change log* plus markers on the graphs.
+- **Known limitation:** entries made while MQTT is disconnected and followed by a restart before it
+  reconnects never reach the server. They remain on the controller (History tab).
+- **MQTT names:** the controller can't see which MQTT login sent a command; the broker decides who
+  may send. A sender can name itself with `"by"` in a JSON command, which is recorded but not verified.
 
 ---
 
@@ -596,17 +630,33 @@ Network settings are read only at startup, so changing them needs a reboot.
 |--------|------|-------|------------|--------|
 | GET | `/` | – | – | the web page |
 | GET | `/api/status` | – | – | status JSON ([section 21](#21-reference-status-json-alarm-codes-reason-strings)) |
-| GET | `/api/config` | – | – | config, passwords masked |
-| POST | `/api/config` | ✔ | JSON body (partial allowed) | result |
-| POST | `/api/output` | ✔ | form: `name`, `mode` = auto/on/off/level, `level` 0..1, `minutes` | result |
-| POST | `/api/time` | ✔ | form: `epoch` (Unix seconds) | result |
-| POST | `/api/reboot` | ✔ | – | result, then reboot after 1 s |
-| POST | `/update` | ✔ | multipart file upload of `firmware.bin` | result, then reboot |
+| GET | `/api/config` | – | – | config, passwords masked; header `X-Config-Version` |
+| GET | `/api/me` | any | – | `{"user": "anna", "role": "operator"}` |
+| GET | `/api/events` | any | – | change log, newest first ([11.5](#115-change-log)) |
+| POST | `/api/config` | any¹ | JSON body (partial allowed); optional `?version=N` | result; `notes` lists the changes |
+| POST | `/api/output` | any | form: `name`, `mode` = auto/on/off/level, `level` 0..1, `minutes` | result |
+| POST | `/api/time` | any | form: `epoch` (Unix seconds) | result |
+| POST | `/api/reboot` | admin | – | result, then reboot after 1 s |
+| POST | `/update` | admin | multipart file upload of `firmware.bin` | result, then reboot |
 
-A result looks like `{"ok": true}`, `{"ok": true, "rebootRequired": true}` or
+¹ Operators may only change setpoints: rule thresholds and levels, time windows, cycle times, linear
+ranges, `minOnS`/`minOffS`, and alarm limits and delays. Pins, rule types, signals, `maxOnS`/`cooldownS`,
+users and all other settings need an admin.
+
+A result looks like `{"ok": true, "notes": ["outputs[humidifier].rules[0].on: 85 -> 84"]}`,
+`{"ok": true, "rebootRequired": true}` or
 `{"ok": false, "errors": ["outputs[0].pin: GPIO 0 strapping pin, may toggle during boot"]}`
-(HTTP 400 on failure). Login is HTTP Basic auth with `web.user` / `web.password`, so the browser
-shows its login dialog.
+(HTTP 400 on failure).
+
+**Logins** are HTTP Basic auth against `web.users`, so the browser shows its login dialog. Each user
+has a role, `admin` or `operator`, and there must always be at least one admin. A wrong user name or
+password is recorded in the change log as `login-failed`: only the user name, never the password,
+and at most one entry per 30 s, so password guessing can't flood the log or wear out the flash.
+
+**Version check:** `GET /api/config` returns the current config version in the header
+`X-Config-Version`. When `POST /api/config?version=N` is sent and someone else saved in between, the
+change is refused with "changed in the meantime", so nobody silently overwrites someone else's change.
+The web page always sends the version.
 
 Examples with `curl` while connected to the access point:
 
@@ -633,7 +683,9 @@ are no external files, because there is no internet on the access point. It poll
 | Overview | alarms, then one card per group with its signal values (with source count, disagree warning) |
 | Outputs | table with state, mode, reason; buttons Auto / On / Off, % field for PWM; choice of override duration |
 | Sensors | each physical sensor: ok/failures, age, raw values |
-| Configuration | the config JSON in a text area; Reload / Save; errors are shown as a message |
+| Setpoints | a form per output: thresholds, schedule times, cycle times, linear ranges, PWM levels, min on/off times; `maxOnS` and the pause (admin only, greyed out for operators); alarm limits and delays. Save shows the list of changes. |
+| History | the change log: when, who (user, channel, IP address), action, details. Needs a login. |
+| Configuration | the config JSON in a text area (including `web.users`); Reload / Save; errors are shown as a message |
 | System | firmware, chip, reset reason, memory, config source, clock, WiFi, MQTT; buttons: set clock from this device, firmware upload, reboot |
 
 Dark mode follows the phone's setting.
@@ -659,8 +711,9 @@ Only active when `mqtt.enabled` is true **and** the station is connected. Reconn
 | `<base>/signal/<signal>` | out | yes | single value, e.g. `wildnis/climacontrol/signal/chamber.co2` → `812.4`, or `null` |
 | `<base>/alarms` | out | yes | JSON array of active alarms, only when it changes |
 | `<base>/config` | out | yes | config without passwords, after connect and on every change |
-| `<base>/result` | out | no | answer to each command: `{"ok":true}` / `{"ok":false,"errors":[...]}` |
-| `<base>/cmd/output/<name>` | in | **no** | `auto`, `on`, `off`, a number like `0.5`, or `{"mode":"on","minutes":30}` / `{"level":0.4}` |
+| `<base>/result` | out | no | answer to each command: `{"ok":true,"notes":[...]}` / `{"ok":false,"errors":[...]}`; for `cmd/config` the notes list the changes |
+| `<base>/event` | out | no | one change-log entry per message ([11.5](#115-change-log)) |
+| `<base>/cmd/output/<name>` | in | **no** | `auto`, `on`, `off`, a number like `0.5`, or `{"mode":"on","minutes":30,"by":"anna"}` / `{"level":0.4}` (`by` is optional and names the sender in the change log) |
 | `<base>/cmd/config` | in | **no** | partial JSON config, as for `POST /api/config` |
 | `<base>/cmd/reboot` | in | **no** | must be exactly `reboot` |
 
@@ -714,17 +767,41 @@ logins in `server/passwd`. Both are git-ignored, and running the script again ke
 | `output` | `device`, `name` | `level`, `on`, `mode`, `reason` | `outputs` in `<base>/status` |
 | `sensor` | `device`, `id`, `type`, `group` | `ok`, `failures`, `values_<quantity>` | `sensors` in `<base>/status` |
 | `system` | `device` | `uptime_s`, `free_heap`, `min_free_heap`, `wifi_rssi`, `alarms`, `critical_alarms` | `<base>/status` |
+| `alarm` | `device`, `code` | `critical`, `message` | `alarms` in `<base>/status` (used by the alert rules) |
+| `event` | `device`, `action`, `source`, `user` | `seq`, `detail`, `client` | `<base>/event` (change log) |
 
 **Dashboard** `ClimaControl` (Grafana home page): connection state, critical and all alarms, time since
 the last data; chamber temperature, humidity and CO₂; a timeline of all outputs; the redundant chamber
 sensors side by side, to spot a drifting sensor; and WiFi signal, free memory and uptime (a drop means
-the controller restarted). Changes made in the Grafana UI are kept in Grafana's own storage. To keep
-them in the repository, export the dashboard JSON to `server/grafana/dashboards/climacontrol.json`.
+the controller restarted); at the bottom the *Change log* table. Every change also appears as a marker on
+the graphs, so a change in the curve can be matched to "who changed what". Changes made in the Grafana
+UI are kept in Grafana's own storage. To keep them in the repository, export the dashboard JSON to
+`server/grafana/dashboards/climacontrol.json`.
+
+**Alerting** (`server/grafana/provisioning/alerting/`): Grafana checks three rules every 30 s and sends
+push notifications through [ntfy](https://ntfy.sh). Install the ntfy app on the phone and subscribe to
+the topic `NTFY_TOPIC` from `server/.env`.
+
+| Rule | Fires when | Notification |
+|------|------------|--------------|
+| Controller sends no data | no status for 90 s, then 1 more minute (about 2.5 min): controller off, WiFi down, broker or collector down | urgent (priority 5) |
+| Critical alarm | a critical alarm code is active for 1 min; one notification per code, e.g. `limit.chamber.humidity.low` | urgent (priority 5) |
+| Warning | a non-critical alarm (sensor degraded, sensors disagree) for 5 min | normal (priority 3) |
+
+When the problem ends, an "OK again" message follows. While it lasts, a reminder comes every 4 h
+(`policies.yml`).
+
+- **The topic name is the only protection** on the public ntfy.sh server: whoever knows it can read
+  the notifications. It is long and random and lives only in `server/.env`. The notifications only
+  contain alarm codes and values.
+- **Alerts come from the server.** If the server itself is off, nobody is warned. A dead man's
+  switch (an external service that alarms when the server stops reporting) is **not implemented yet**.
 
 **Not implemented yet:**
-- **Alerting.** Nobody is notified yet when the controller goes offline or a critical alarm appears.
-  This is the most important missing piece for a critical system. Grafana can send alerts (e-mail,
-  Telegram, push and so on) once a notification channel is chosen.
+- Remote access from outside the farm network: planned via a VPN (e.g. Tailscale). Control stays on
+  the controller's own web page (reachable from every device on the farm network) and MQTT; a separate
+  control page on the server is not planned.
+- Dead man's switch for the server itself.
 - TLS for MQTT, and running the stack on its final host.
 
 **Connecting the controller:** set this in its configuration, then reboot:
@@ -801,7 +878,7 @@ restart.
 | `wifi.ap.ssid` | `ClimaControl` | Reboot. |
 | `wifi.ap.password` | `CC_DEFAULT_AP_PASSWORD` from `.env` | 8–63 characters, masked. **Change it.** Reboot. |
 | `wifi.sta.ssid` / `.password` | empty | farm WiFi. Reboot. |
-| `web.user` / `web.password` | `admin` / `CC_DEFAULT_WEB_PASSWORD` from `.env` | login for all changes. **Change it.** |
+| `web.users[]` | one user `admin` with `CC_DEFAULT_WEB_PASSWORD` from `.env` | logins: `{"name": "anna", "password": "...", "role": "admin"}` or `"role": "operator"`. Names `a-z 0-9 - _`, passwords at least 8 characters, at least one admin. A password shown as `********` keeps the stored one; a new user needs a real password. The old single-login format (`web.user`/`web.password`) is converted automatically. **Change the default password.** |
 | `mqtt.enabled` | `false` | Reboot. |
 | `mqtt.host` / `.port` | empty / 1883 | Reboot. |
 | `mqtt.user` / `.password` | empty | Reboot. |

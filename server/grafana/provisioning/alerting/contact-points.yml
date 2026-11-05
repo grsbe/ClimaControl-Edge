@@ -1,0 +1,29 @@
+# Where alerts go: push notifications via ntfy.sh (app for Android / iPhone, no account needed).
+# The topic name comes from server/.env (NTFY_TOPIC); subscribe to it in the ntfy app.
+#
+# The URL parameters are ntfy options:
+#   tpl=1      render the title (t) and message (m) from Grafana's JSON with the templates below
+#   p=5 / p=3  priority: 5 = urgent (long vibration, can break through do-not-disturb), 3 = normal
+#   tags=...   emoji shown in the notification
+# Templates (URL-encoded):
+#   t: ClimaControl: {{.commonLabels.alertname}}{{if eq .status "resolved"}} - resolved{{end}}
+#   m: {{range .alerts}}{{if eq .status "resolved"}}OK again: {{end}}{{.annotations.summary}}
+#      {{end}}
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: ntfy-urgent
+    receivers:
+      - uid: ntfy-urgent
+        type: webhook
+        settings:
+          httpMethod: POST
+          url: "https://ntfy.sh/${NTFY_TOPIC}?tpl=1&p=5&tags=rotating_light&t=ClimaControl%3A%20%7B%7B.commonLabels.alertname%7D%7D%7B%7Bif%20eq%20.status%20%22resolved%22%7D%7D%20-%20resolved%7B%7Bend%7D%7D&m=%7B%7Brange%20.alerts%7D%7D%7B%7Bif%20eq%20.status%20%22resolved%22%7D%7DOK%20again%3A%20%7B%7Bend%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D"
+  - orgId: 1
+    name: ntfy-normal
+    receivers:
+      - uid: ntfy-normal
+        type: webhook
+        settings:
+          httpMethod: POST
+          url: "https://ntfy.sh/${NTFY_TOPIC}?tpl=1&p=3&tags=warning&t=ClimaControl%3A%20%7B%7B.commonLabels.alertname%7D%7D%7B%7Bif%20eq%20.status%20%22resolved%22%7D%7D%20-%20resolved%7B%7Bend%7D%7D&m=%7B%7Brange%20.alerts%7D%7D%7B%7Bif%20eq%20.status%20%22resolved%22%7D%7DOK%20again%3A%20%7B%7Bend%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D"

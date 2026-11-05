@@ -27,6 +27,9 @@ $wanted = [ordered]@{
     INFLUX_ADMIN_PASSWORD    = { New-Secret 24 }   # InfluxDB web UI, user admin
     INFLUX_TOKEN             = { New-Secret 40 }   # API token used by Telegraf and Grafana
     GRAFANA_ADMIN_PASSWORD   = { New-Secret 20 }   # Grafana, user admin
+    # Push alerts via ntfy.sh: whoever knows this topic name can read the alerts, so it is long and random.
+    # Subscribe to it in the ntfy app.
+    NTFY_TOPIC               = { "climacontrol-" + (-join (1..24 | ForEach-Object { [char[]]"abcdefghijkmnopqrstuvwxyz23456789" | Get-Random })) }
 }
 $out = @("# Secrets of the ClimaControl server stack (git-ignored). Created by setup.ps1.")
 foreach ($k in $wanted.Keys) {

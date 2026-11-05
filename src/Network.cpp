@@ -36,8 +36,14 @@ void Network::loop() {
     if (cfg_.wifi.staSsid.empty()) return;
     const bool now = online();
     if (now != wasOnline_) {
-        if (now) ESP_LOGI(TAG, "joined '%s' as %s", cfg_.wifi.staSsid.c_str(), WiFi.localIP().toString().c_str());
-        else ESP_LOGW(TAG, "lost connection to '%s'", cfg_.wifi.staSsid.c_str());
+        if (now) {
+            ESP_LOGI(TAG, "joined '%s' as %s", cfg_.wifi.staSsid.c_str(), WiFi.localIP().toString().c_str());
+            // The first time request at boot runs before the network is up and fails; SNTP then backs
+            // off for a long time. Restart it now that the internet is reachable.
+            configTzTime(cfg_.time.tz.c_str(), cfg_.time.ntpServer.c_str());
+        } else {
+            ESP_LOGW(TAG, "lost connection to '%s'", cfg_.wifi.staSsid.c_str());
+        }
         wasOnline_ = now;
     }
     if (!now && millis() - lastAttemptMs_ > kRetryMs) {

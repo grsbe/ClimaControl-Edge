@@ -221,6 +221,123 @@ bool signalExists(const Config& cfg, const std::string& name) {
 
 }  // namespace
 
+const char* roleName(Role r) { return r == Role::Admin ? "admin" : "operator"; }
+
+const WebUser* findUser(const Config& cfg, const std::string& name, const std::string& password) {
+    for (const WebUser& u : cfg.web.users) {
+        if (u.name == name && !u.password.empty() && u.password == password) return &u;
+    }
+    return nullptr;
+}
+
+bool onlySetpointsChanged(const Config& before, const Config& after) {
+    if (before.outputs.size() != after.outputs.size() || before.alarms.size() != after.alarms.size()) return false;
+    // Copy the allowed fields from `after` into a copy of `before`; if that gives `after`, nothing else changed.
+    Config merged = before;
+    for (size_t i = 0; i < after.outputs.size(); i++) {
+        OutputConfig& m = merged.outputs[i];
+        const OutputConfig& a = after.outputs[i];
+        if (m.name != a.name || m.rules.size() != a.rules.size()) return false;
+        m.minOnS = a.minOnS;
+        m.minOffS = a.minOffS;
+        for (size_t j = 0; j < a.rules.size(); j++) {
+            Rule& mr = m.rules[j];
+            const Rule& ar = a.rules[j];
+            if (mr.type != ar.type || mr.signal != ar.signal) return false;
+            mr.on = ar.on;
+            mr.off = ar.off;
+            mr.level = ar.level;
+            mr.windows = ar.windows;
+            mr.onS = ar.onS;
+            mr.periodS = ar.periodS;
+            mr.inMin = ar.inMin;
+            mr.inMax = ar.inMax;
+            mr.outMin = ar.outMin;
+            mr.outMax = ar.outMax;
+        }
+    }
+    for (size_t i = 0; i < after.alarms.size(); i++) {
+        if (merged.alarms[i].signal != after.alarms[i].signal) return false;
+        merged.alarms[i].min = after.alarms[i].min;
+        merged.alarms[i].max = after.alarms[i].max;
+        merged.alarms[i].delayS = after.alarms[i].delayS;
+    }
+    return configToJson(merged, true) == configToJson(after, true);
+}
+
+namespace {
+
+// Flattens a JSON document into "path" -> "value". Array elements are labelled by their name/id
+// (outputs[humidifier], sensors[inflow], web.users[anna]) or, if they have none, by index.
+void flatten(JsonVariantConst v, const std::string& path, std::vector<std::pair<std::string, std::string>>& out) {
+    if (v.is<JsonObjectConst>()) {
+        for (JsonPairConst kv : v.as<JsonObjectConst>()) {
+            flatten(kv.value(), path.empty() ? kv.key().c_str() : path + "." + kv.key().c_str(), out);
+        }
+    } else if (v.is<JsonArrayConst>()) {
+        int i = 0;
+        for (JsonVariantConst e : v.as<JsonArrayConst>()) {
+            std::string label = std::to_string(i++);
+            if (e["name"].is<const char*>()) label = e["name"].as<const char*>();
+            else if (e["id"].is<const char*>()) label = e["id"].as<const char*>();
+            flatten(e, path + "[" + label + "]", out);
+        }
+    } else {
+        std::string s;
+        if (v.is<const char*>()) s = v.as<const char*>();
+        else serializeJson(v, s);
+        out.emplace_back(path, s);
+    }
+}
+
+}  // namespace
+
+std::vector<std::string> describeChanges(const Config& before, const Config& after) {
+    std::vector<std::pair<std::string, std::string>> a, b;
+    JsonDocument da, db;
+    deserializeJson(da, configToJson(before, false));
+    deserializeJson(db, configToJson(after, false));
+    flatten(da.as<JsonVariantConst>(), "", a);
+    flatten(db.as<JsonVariantConst>(), "", b);
+
+    std::vector<std::string> changes;
+    auto lookup = [](const std::vector<std::pair<std::string, std::string>>& list, const std::string& key,
+                     std::string& value) {
+        for (const auto& kv : list) {
+            if (kv.first == key) {
+                value = kv.second;
+                return true;
+            }
+        }
+        return false;
+    };
+    // Passwords appear masked in the JSON; they are compared separately below.
+    auto isPassword = [](const std::string& path) {
+        return path.size() >= 8 && path.compare(path.size() - 8, 8, "password") == 0;
+    };
+    for (const auto& kv : a) {
+        std::string nv;
+        if (isPassword(kv.first)) continue;
+        if (!lookup(b, kv.first, nv)) changes.push_back(kv.first + ": " + kv.second + " -> (removed)");
+        else if (nv != kv.second) changes.push_back(kv.first + ": " + kv.second + " -> " + nv);
+    }
+    for (const auto& kv : b) {
+        std::string ov;
+        if (!isPassword(kv.first) && !lookup(a, kv.first, ov)) changes.push_back(kv.first + ": (new) " + kv.second);
+    }
+    // Passwords are masked in the JSON above, so compare them directly.
+    if (before.wifi.apPassword != after.wifi.apPassword) changes.push_back("wifi.ap.password: changed");
+    if (before.wifi.staPassword != after.wifi.staPassword) changes.push_back("wifi.sta.password: changed");
+    if (before.mqtt.password != after.mqtt.password) changes.push_back("mqtt.password: changed");
+    for (const WebUser& nu : after.web.users) {
+        for (const WebUser& ou : before.web.users) {
+            if (ou.name == nu.name && ou.password != nu.password)
+                changes.push_back("web.users[" + nu.name + "].password: changed");
+        }
+    }
+    return changes;
+}
+
 bool parseSignalName(const std::string& name, std::string& group, Quantity& q) {
     size_t dot = name.find('.');
     if (dot == std::string::npos) return false;
@@ -252,8 +369,38 @@ bool parseConfig(const std::string& json, Config& cfg, std::vector<std::string>&
     r.string(wifi["sta"]["ssid"], "wifi.sta.ssid", cfg.wifi.staSsid);
     r.secret(wifi["sta"]["password"], "wifi.sta.password", cfg.wifi.staPassword);
 
-    r.string(root["web"]["user"], "web.user", cfg.web.user);
-    r.secret(root["web"]["password"], "web.password", cfg.web.password);
+    JsonVariantConst web = root["web"];
+    if (!web["user"].isNull() || !web["password"].isNull()) {
+        // Old format with a single login (firmware <= 0.1.0): becomes the only admin user.
+        WebUser u = cfg.web.users.empty() ? WebUser{"admin", "", Role::Admin} : cfg.web.users.front();
+        r.string(web["user"], "web.user", u.name);
+        r.secret(web["password"], "web.password", u.password);
+        u.role = Role::Admin;
+        cfg.web.users = {u};
+    }
+    if (r.array(web["users"], "web.users")) {
+        std::vector<WebUser> users;
+        int i = 0;
+        for (JsonVariantConst e : web["users"].as<JsonArrayConst>()) {
+            std::string p = "web.users[" + std::to_string(i++) + "]";
+            WebUser u;
+            r.string(e["name"], p + ".name", u.name);
+            // A masked password keeps the stored password of the user with the same name.
+            for (const WebUser& old : cfg.web.users) {
+                if (old.name == u.name) u.password = old.password;
+            }
+            const std::string before = u.password;
+            r.secret(e["password"], p + ".password", u.password);
+            if (u.password.empty() && before.empty()) r.fail(p + ".password", "set a password for this new user");
+            std::string role = "operator";
+            r.string(e["role"], p + ".role", role);
+            if (role == "admin") u.role = Role::Admin;
+            else if (role == "operator") u.role = Role::Operator;
+            else r.fail(p + ".role", "must be admin or operator");
+            users.push_back(u);
+        }
+        cfg.web.users = users;
+    }
 
     JsonVariantConst mqtt = root["mqtt"];
     r.boolean(mqtt["enabled"], "mqtt.enabled", cfg.mqtt.enabled);
@@ -340,7 +487,19 @@ std::vector<std::string> validateConfig(const Config& cfg, Chip chip) {
     } else if (cfg.wifi.staSsid.empty()) {
         err("wifi", "enable the access point or configure wifi.sta, otherwise the device is unreachable");
     }
-    if (cfg.web.user.empty() || cfg.web.password.empty()) err("web", "user and password are required");
+    {
+        std::set<std::string> userNames;
+        bool admin = false;
+        for (size_t i = 0; i < cfg.web.users.size(); i++) {
+            const WebUser& u = cfg.web.users[i];
+            std::string p = "web.users[" + std::to_string(i) + "]";
+            if (!validName(u.name)) err(p + ".name", "use 1-32 characters a-z, 0-9, '-' or '_'");
+            if (!userNames.insert(u.name).second) err(p + ".name", "duplicate user '" + u.name + "'");
+            if (u.password.size() < 8) err(p + ".password", "at least 8 characters");
+            admin |= u.role == Role::Admin;
+        }
+        if (!admin) err("web.users", "at least one user must have the role admin");
+    }
 
     if (cfg.mqtt.enabled) {
         if (cfg.mqtt.host.empty()) err("mqtt.host", "required when MQTT is enabled");
@@ -440,8 +599,13 @@ std::string configToJson(const Config& cfg, bool includeSecrets) {
     doc["wifi"]["ap"]["password"] = secret(cfg.wifi.apPassword);
     doc["wifi"]["sta"]["ssid"] = cfg.wifi.staSsid;
     doc["wifi"]["sta"]["password"] = secret(cfg.wifi.staPassword);
-    doc["web"]["user"] = cfg.web.user;
-    doc["web"]["password"] = secret(cfg.web.password);
+    JsonArray users = doc["web"]["users"].to<JsonArray>();
+    for (const WebUser& u : cfg.web.users) {
+        JsonObject o = users.add<JsonObject>();
+        o["name"] = u.name;
+        o["password"] = secret(u.password);
+        o["role"] = roleName(u.role);
+    }
 
     JsonObject mqtt = doc["mqtt"].to<JsonObject>();
     mqtt["enabled"] = cfg.mqtt.enabled;

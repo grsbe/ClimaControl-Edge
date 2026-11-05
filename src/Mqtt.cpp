@@ -34,6 +34,7 @@ void Mqtt::begin(const cc::Config& cfg) {
         onMessage(topic, std::string(reinterpret_cast<const char*>(payload), len));
     });
     lastAttemptMs_ = millis() - kRetryMs;
+    publishedEventSeq_ = app.bootEventSeq() - 1;
 }
 
 void Mqtt::connect() {
@@ -64,6 +65,12 @@ void Mqtt::loop() {
     const uint32_t version = app.configVersion();
     if (version != publishedConfigVersion_ && publish("config", cc::configToJson(app.config(), false), true))
         publishedConfigVersion_ = version;
+
+    // Change log entries made since the last publish (also those made while disconnected).
+    for (const cc::Event& e : app.eventsSince(publishedEventSeq_)) {
+        if (!publish("event", cc::eventToJson(e), false)) break;
+        publishedEventSeq_ = e.seq;
+    }
 
     if (millis() - lastPublishMs_ >= intervalMs_) {
         lastPublishMs_ = millis();
@@ -112,6 +119,14 @@ void Mqtt::onMessage(const std::string& topic, const std::string& payload) {
     const std::string cmd = topic.substr(prefix.size());
     ESP_LOGI(TAG, "command %s: %s", cmd.c_str(), payload.c_str());
 
+    // The broker checks who may send commands; the controller cannot see the MQTT login. A sender may
+    // name itself with "by" in a JSON payload (e.g. the server's control page) for the change log.
+    cc::Actor who{"mqtt", "", ""};
+    if (!payload.empty() && payload[0] == '{') {
+        JsonDocument d;
+        if (!deserializeJson(d, payload)) who.user = d["by"] | "";
+    }
+
     if (cmd.rfind("output/", 0) == 0) {
         std::string mode = payload;
         float level = 0;
@@ -129,20 +144,22 @@ void Mqtt::onMessage(const std::string& topic, const std::string& payload) {
             level = number;
         }
         std::string error;
-        if (app.setOutput(cmd.substr(7), mode, level, minutes, error)) reply(true, {});
+        if (app.setOutput(cmd.substr(7), mode, level, minutes, who, error)) reply(true, {});
         else reply(false, {error});
     } else if (cmd == "config") {
-        std::vector<std::string> errors;
+        std::vector<std::string> errors, changes;
         bool reboot = false;
-        if (app.updateConfig(payload, errors, reboot))
-            reply(true, reboot ? std::vector<std::string>{"saved, reboot to apply network settings"}
-                               : std::vector<std::string>{});
-        else
+        if (app.updateConfig(payload, who, cc::Role::Admin, 0, errors, changes, reboot)) {
+            if (changes.empty()) changes.push_back("no changes");
+            if (reboot) changes.push_back("saved, reboot to apply network settings");
+            reply(true, changes);
+        } else {
             reply(false, errors);
+        }
     } else if (cmd == "reboot") {
         if (payload != "reboot") return reply(false, {"send the payload 'reboot' to confirm"});
         reply(true, {});
-        app.requestReboot();
+        app.requestReboot(who);
     } else {
         reply(false, {"unknown command '" + cmd + "'"});
     }

@@ -8,6 +8,7 @@
 #include "Sensirion.h"
 #include "Simulation.h"
 #include "Status.h"
+#include "Events.h"
 
 using namespace cc;
 
@@ -465,6 +466,98 @@ void test_default_config_against_simulation() {
     TEST_ASSERT_TRUE(doc["signals"]["chamber.co2"]["value"].is<float>());
 }
 
+// ---------- users, setpoints, change log ----------
+
+void test_legacy_single_login_becomes_admin_user() {
+    Config cfg = defaultConfig(Chip::Esp32);
+    std::vector<std::string> errors;
+    TEST_ASSERT_TRUE(parseConfig(R"({"web": {"user": "chef", "password": "geheim123"}})", cfg, errors));
+    TEST_ASSERT_EQUAL(1, cfg.web.users.size());
+    TEST_ASSERT_EQUAL_STRING("chef", cfg.web.users[0].name.c_str());
+    TEST_ASSERT_TRUE(cfg.web.users[0].role == Role::Admin);
+    TEST_ASSERT_NOT_NULL(findUser(cfg, "chef", "geheim123"));
+    TEST_ASSERT_NULL(findUser(cfg, "chef", "wrong"));
+}
+
+void test_users_masked_password_and_roles() {
+    Config cfg = defaultConfig(Chip::Esp32);
+    cfg.web.users = {WebUser{"anna", "anna-secret", Role::Admin}};
+    std::vector<std::string> errors;
+    // anna keeps her password via the mask, ben is new and gets one
+    TEST_ASSERT_TRUE(parseConfig(R"({"web": {"users": [
+        {"name": "anna", "password": "********", "role": "admin"},
+        {"name": "ben", "password": "ben-secret", "role": "operator"}]}})", cfg, errors));
+    assertNoErrors(errors);
+    TEST_ASSERT_NOT_NULL(findUser(cfg, "anna", "anna-secret"));
+    TEST_ASSERT_TRUE(findUser(cfg, "ben", "ben-secret")->role == Role::Operator);
+    TEST_ASSERT_EQUAL(std::string::npos, configToJson(cfg, false).find("secret"));
+    // a new user with only the mask has no password
+    TEST_ASSERT_FALSE(parseConfig(R"({"web": {"users": [{"name": "carl", "password": "********", "role": "admin"}]}})",
+                                  cfg, errors));
+    // no admin left
+    Config c2 = defaultConfig(Chip::Esp32);
+    c2.web.users = {WebUser{"ben", "ben-secret", Role::Operator}};
+    TEST_ASSERT_EQUAL(1, validateConfig(c2, Chip::Esp32).size());
+}
+
+void test_only_setpoints_changed() {
+    const Config before = defaultConfig(Chip::Esp32);
+    Config after = before;
+    after.outputs[1].rules[0].on = 83;           // humidifier threshold
+    after.outputs[3].rules[0].windows[0].fromMin = 7 * 60;  // light schedule
+    after.alarms[0].min = 70;                    // alarm limit
+    TEST_ASSERT_TRUE(onlySetpointsChanged(before, after));
+
+    Config pin = after;
+    pin.outputs[0].pin = 33;
+    TEST_ASSERT_FALSE(onlySetpointsChanged(before, pin));
+    Config maxOn = after;
+    maxOn.outputs[1].maxOnS = 0;                 // safety limit: admin only
+    TEST_ASSERT_FALSE(onlySetpointsChanged(before, maxOn));
+    Config signal = after;
+    signal.outputs[1].rules[0].signal = "inflow.humidity";
+    TEST_ASSERT_FALSE(onlySetpointsChanged(before, signal));
+    Config user = after;
+    user.web.users[0].password = "something-else";
+    TEST_ASSERT_FALSE(onlySetpointsChanged(before, user));
+}
+
+void test_describe_changes() {
+    const Config before = defaultConfig(Chip::Esp32);
+    Config after = before;
+    after.outputs[1].rules[0].on = 83;
+    after.mqtt.password = "new-secret";
+    auto changes = describeChanges(before, after);
+    TEST_ASSERT_EQUAL(2, changes.size());
+    TEST_ASSERT_EQUAL_STRING("outputs[humidifier].rules[0].on: 85 -> 83", changes[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("mqtt.password: changed", changes[1].c_str());
+    TEST_ASSERT_EQUAL(0, describeChanges(before, before).size());
+}
+
+void test_event_log() {
+    EventLog log;
+    Actor anna{"web", "anna", "192.168.0.23"};
+    for (int i = 0; i < 105; i++) log.add(anna, "output", "light: on", 1793900000 + i, i);
+    TEST_ASSERT_EQUAL(EventLog::kCapacity, log.all().size());
+    TEST_ASSERT_EQUAL(105, log.lastSeq());
+    TEST_ASSERT_EQUAL(6, log.all().front().seq);       // oldest five dropped
+    TEST_ASSERT_EQUAL(3, log.since(102).size());
+
+    Event back;
+    TEST_ASSERT_TRUE(eventFromJson(eventToJson(log.all().back()), back));
+    TEST_ASSERT_EQUAL(105, back.seq);
+    TEST_ASSERT_EQUAL_STRING("anna", back.user.c_str());
+    TEST_ASSERT_EQUAL_STRING("192.168.0.23", back.client.c_str());
+
+    EventLog restored;
+    for (const Event& e : log.all()) restored.restore(e);
+    TEST_ASSERT_EQUAL(105, restored.lastSeq());
+    TEST_ASSERT_EQUAL(106, restored.add(anna, "x", "", 0, 0).seq);  // numbering continues
+
+    std::string longDetail(5000, 'x');
+    TEST_ASSERT_EQUAL(EventLog::kMaxDetail, log.add(anna, "config", longDetail, 0, 0).detail.size());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_crc8_datasheet_example);
@@ -492,5 +585,10 @@ int main() {
     RUN_TEST(test_limit_alarm_delay);
     RUN_TEST(test_millis_wraparound);
     RUN_TEST(test_default_config_against_simulation);
+    RUN_TEST(test_legacy_single_login_becomes_admin_user);
+    RUN_TEST(test_users_masked_password_and_roles);
+    RUN_TEST(test_only_setpoints_changed);
+    RUN_TEST(test_describe_changes);
+    RUN_TEST(test_event_log);
     return UNITY_END();
 }

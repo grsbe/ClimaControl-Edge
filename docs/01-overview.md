@@ -344,6 +344,7 @@ production.
 | Sensors: SCD41, BME680, BME280 behind a TCA9548 multiplexer | implemented; **not yet tested with real sensors** |
 | Relay and PWM outputs | implemented; **not yet tested with real SSRs** |
 | Web UI, HTTP API, over-the-air update | implemented, runs on a real ESP32-S3 with simulated sensors |
+| Personal logins (admin / operator), Setpoints form, change log | implemented, tested on a real ESP32-S3 |
 | Classic ESP32 (DevKitC-32E) | builds; **not yet tested on real hardware** |
 | MQTT client (status, alarms, remote control) | implemented; **not yet tested against a broker** |
 | Wokwi simulator setup | configured; **not yet tried** |
@@ -355,7 +356,9 @@ production.
 | BME680 air-quality index (needs Bosch's BSEC library) | **not implemented yet**; the raw gas resistance is reported |
 | MQTT over TLS | **not implemented yet**; use a trusted network or VPN |
 | Server: storing history, dashboards | prototype in `server/` (Telegraf + InfluxDB + Grafana), runs on a PC; **not yet deployed on a permanent server** |
-| Server: alerting a person (controller offline, critical alarm) | **not implemented yet** |
+| Server: push alerts via ntfy (controller offline, critical alarm, warnings) | implemented; "offline" alert tested end to end; **critical-alarm alert not yet tested with a real alarm** |
+| Server: alert when the server itself is down (dead man's switch) | **not implemented yet** |
+| Remote access from outside the farm network | **not set up yet**; planned via a VPN (e.g. Tailscale), giving access to Grafana and the controller page without opening anything to the internet. A separate control page on the server is not needed: the controller's own page works from every device on the farm network. |
 
 ### Glossary (short)
 

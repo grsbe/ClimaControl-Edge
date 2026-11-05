@@ -72,6 +72,7 @@ services:
       GF_NEWS_NEWS_FEED_ENABLED: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/climacontrol.json
       INFLUX_TOKEN: ${INFLUX_TOKEN:?run setup.ps1 first}
+      NTFY_TOPIC: ${NTFY_TOPIC:?run setup.ps1 first}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

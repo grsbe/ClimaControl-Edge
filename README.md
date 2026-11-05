@@ -183,7 +183,8 @@ Details are in the documentation (Part 2, section 16.2).
 
 ## Not done yet
 
-- **Alerting**: the server does not yet notify anyone when the controller goes offline or a critical alarm appears
+- Server: alert when the server itself is down (dead man's switch)
+- Remote access from outside the farm network (planned via VPN, e.g. Tailscale)
 - The server stack runs as a prototype on a PC; not yet deployed on a permanent server
 - Grid sync input (zero-cross), CAN bus, LCD + keys from the block diagram
 - BME680 air-quality index (needs Bosch's proprietary BSEC library; raw gas resistance is reported)
