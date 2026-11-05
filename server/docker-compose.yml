@@ -1,0 +1,23 @@
+# Minimal MQTT broker for testing the controller on your PC:
+#   cd server && docker compose up -d
+# Then set mqtt.host in the controller config to your PC's IP address.
+# Watch everything the controller sends:
+#   docker exec -it climacontrol-mqtt mosquitto_sub -v -t "wildnis/#"
+# Switch an output:
+#   docker exec -it climacontrol-mqtt mosquitto_pub -t wildnis/climacontrol/cmd/output/light -m on
+#
+# This broker accepts anyone on your network. Before using it for real, add users
+# (mosquitto_passwd) and set allow_anonymous false in mosquitto.conf.
+services:
+  mqtt:
+    image: eclipse-mosquitto:2.0.20
+    container_name: climacontrol-mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+
+volumes:
+  mosquitto-data:

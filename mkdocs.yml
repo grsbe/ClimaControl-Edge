@@ -1,0 +1,72 @@
+# Documentation website (MkDocs + Material theme), built from the Markdown files in docs/.
+#   tools\docs.cmd           (double-click) build the static website into site\ and open it; works offline
+#   tools\docs.cmd serve     live preview at http://localhost:8000 (reloads when you edit a file)
+site_name: ClimaControl
+site_description: Firmware documentation for the Wildnismanufaktur climate controller
+site_url: https://grsbe.github.io/ClimaControl-Edge/
+repo_url: https://github.com/grsbe/ClimaControl-Edge
+repo_name: grsbe/ClimaControl-Edge
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+
+# Plain .html links so the built site also works when opened straight from disk (file://)
+use_directory_urls: false
+
+# Report broken links and #anchors (build --strict turns them into errors)
+validation:
+  links:
+    anchors: warn
+
+nav:
+  - Home: index.md
+  - 1 – Overview: 01-overview.md
+  - 2 – Building blocks: 02-building-blocks.md
+  - 3 – Beginner guide: 03-beginner-guide.md
+
+theme:
+  name: material
+  language: en
+  font: false            # system fonts, no download from Google: works without internet
+  icon:
+    logo: material/mushroom
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: green
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: green
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.highlight
+    - content.code.copy
+
+plugins:
+  - search
+  - offline              # search also works when the site is opened from disk
+
+markdown_extensions:
+  - tables
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details

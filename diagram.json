@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "author": "Wildnismanufaktur",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-led", "id": "hepa", "top": -40, "left": 200, "attrs": { "color": "blue", "label": "OUT1 hepa" } },
+    { "type": "wokwi-led", "id": "humidifier", "top": -40, "left": 260, "attrs": { "color": "cyan", "label": "OUT2 humidifier" } },
+    { "type": "wokwi-led", "id": "uv", "top": -40, "left": 320, "attrs": { "color": "purple", "label": "OUT3 uv" } },
+    { "type": "wokwi-led", "id": "light", "top": -40, "left": 380, "attrs": { "color": "yellow", "label": "OUT4 light" } },
+    { "type": "wokwi-led", "id": "inlet", "top": 60, "left": 200, "attrs": { "color": "green", "label": "OUT5 inlet" } },
+    { "type": "wokwi-led", "id": "outlet", "top": 60, "left": 260, "attrs": { "color": "green", "label": "OUT6 outlet" } },
+    { "type": "wokwi-led", "id": "fan1", "top": 60, "left": 320, "attrs": { "color": "red", "label": "OUT7 PWM" } },
+    { "type": "wokwi-led", "id": "fan2", "top": 60, "left": 380, "attrs": { "color": "red", "label": "OUT8 PWM" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "hepa:A", "esp:4", "blue", [] ],
+    [ "humidifier:A", "esp:5", "cyan", [] ],
+    [ "uv:A", "esp:6", "purple", [] ],
+    [ "light:A", "esp:7", "gold", [] ],
+    [ "inlet:A", "esp:15", "green", [] ],
+    [ "outlet:A", "esp:16", "green", [] ],
+    [ "fan1:A", "esp:17", "red", [] ],
+    [ "fan2:A", "esp:18", "red", [] ],
+    [ "hepa:C", "esp:GND.1", "black", [] ],
+    [ "humidifier:C", "esp:GND.1", "black", [] ],
+    [ "uv:C", "esp:GND.1", "black", [] ],
+    [ "light:C", "esp:GND.1", "black", [] ],
+    [ "inlet:C", "esp:GND.1", "black", [] ],
+    [ "outlet:C", "esp:GND.1", "black", [] ],
+    [ "fan1:C", "esp:GND.1", "black", [] ],
+    [ "fan2:C", "esp:GND.1", "black", [] ]
+  ]
+}
