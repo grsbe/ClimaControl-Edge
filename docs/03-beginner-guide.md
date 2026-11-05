@@ -243,12 +243,15 @@ minute.
 
 ### 4.4 Flashing ClimaControl onto your board
 
+0. **Once per checkout: set the factory passwords.** Copy `.env.example` in the project folder to
+   `.env` and replace the two `change-me-please` values. `.env` is ignored by git, so the passwords
+   never end up on GitHub. Without it the build stops with *"Factory passwords missing"*.
 1. Plug the board in with a **data** USB cable (some cables only charge) using the port labelled
    **UART** or **COM**.
 2. In VS Code, choose environment `env:esp32s3_sim` (no sensors needed).
 3. Click **→ Upload**. You will see `Connecting....` and then percentages. At the end: `SUCCESS`.
 4. Click **🔌 Monitor**. Press **RST** on the board to see the boot messages.
-5. On your phone, join the WiFi **ClimaControl** (password `pilzezucht`) and open **http://192.168.4.1**.
+5. On your phone, join the WiFi **ClimaControl** (password: `CC_DEFAULT_AP_PASSWORD` from your `.env`) and open **http://192.168.4.1**.
 
 If the upload hangs at `Connecting...`: hold **BOOT**, press and release **RST**, release **BOOT**, and try
 again.
@@ -1105,7 +1108,7 @@ This is the main reason the code is split into two layers.
 With `esp32s3_sim` flashed and your phone on the `ClimaControl` WiFi at `http://192.168.4.1`:
 
 1. **Overview:** watch `chamber.co2` slowly rise (the "mushrooms" breathe) until the fans start at 1000 ppm.
-2. **Outputs:** press **On** for `uv`. The browser asks for the login (`admin` / `pilzezucht`). The *Why*
+2. **Outputs:** press **On** for `uv`. The browser asks for the login (`admin` and `CC_DEFAULT_WEB_PASSWORD` from `.env`). The *Why*
    column shows `manual` and a countdown. Press **Auto** and it goes back to `no rules`.
 3. **System:** press **Set clock from this device**. The `light` output leaves failsafe and follows the
    08:00–20:00 schedule.
@@ -1223,7 +1226,7 @@ Every feature follows this path: **Config → validation → Controller → alar
 | Reset reason `watchdog` | a task hung for 15 s | look at the log before the restart; report it with the log |
 | Reset reason `crash` | software bug | the monitor shows a decoded backtrace (function names + lines), copy it |
 | WiFi `ClimaControl` does not appear | access point disabled in config, or the board is not running | serial log; if needed, reflash (the config stays) |
-| The web page asks for a password | changing things needs the login | `admin` / `pilzezucht` unless changed |
+| The web page asks for a password | changing things needs the login | `admin` and `CC_DEFAULT_WEB_PASSWORD` from `.env`, unless changed in the configuration |
 | Config save shows errors | validation found a problem | the message names the exact field, e.g. `outputs[2].pin: ...` |
 | Sensor shows `init failed` / many failures | wiring, address, mux channel, power | run the I²C scanner from 5.7; compare with `sensors[]` in the config |
 | A signal is `null`, outputs in `failsafe` | all sensors of that signal failed | Sensors tab: which ones? Check the wiring. |

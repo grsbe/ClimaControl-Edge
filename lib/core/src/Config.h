@@ -9,6 +9,11 @@
 #include "Pins.h"
 #include "Types.h"
 
+// Factory passwords are not stored in git. tools/env_defaults.py reads them from .env at build time.
+#if !defined(CC_DEFAULT_AP_PASSWORD) || !defined(CC_DEFAULT_WEB_PASSWORD)
+#error "Factory passwords missing: copy .env.example to .env (see tools/env_defaults.py)"
+#endif
+
 namespace cc {
 
 // Passwords are reported as this string. Writing it back keeps the stored password.
@@ -73,14 +78,14 @@ struct Config {
     struct {
         bool apEnabled = true;
         std::string apSsid = "ClimaControl";
-        std::string apPassword = "pilzezucht";
+        std::string apPassword = CC_DEFAULT_AP_PASSWORD;
         std::string staSsid;
         std::string staPassword;
     } wifi;
 
     struct {
         std::string user = "admin";
-        std::string password = "pilzezucht";
+        std::string password = CC_DEFAULT_WEB_PASSWORD;
     } web;
 
     struct {

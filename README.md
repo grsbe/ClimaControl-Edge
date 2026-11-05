@@ -85,11 +85,24 @@ Without VS Code, or without installing anything except Docker:
 .\tools\pio.ps1 run -e esp32s3     # compile (flashing needs USB, use the VS Code extension for that)
 ```
 
+### Factory passwords (`.env`)
+
+The factory passwords are not stored in git. Before the first build, copy `.env.example` to `.env`
+(git ignores it) and choose them:
+
+```ini
+CC_DEFAULT_AP_PASSWORD=...    # own WiFi access point, 8-63 characters
+CC_DEFAULT_WEB_PASSWORD=...   # login for changes in the web UI (user: admin)
+```
+
+The build stops with a clear message if `.env` is missing. The values only apply to a controller
+without a stored configuration (new or erased board); after that, passwords are changed in the web UI.
+
 ### First start
 
-1. Connect a phone or laptop to the WiFi **ClimaControl**, password `pilzezucht`.
+1. Connect a phone or laptop to the WiFi **ClimaControl**, password `CC_DEFAULT_AP_PASSWORD` from `.env`.
 2. Open **http://192.168.4.1**.
-3. Changing anything asks for a login: user `admin`, password `pilzezucht`.
+3. Changing anything asks for a login: user `admin`, password `CC_DEFAULT_WEB_PASSWORD` from `.env`.
 4. **Change both passwords** under *Configuration* (`wifi.ap.password`, `web.password`).
 
 To connect it to the farm network (needed for MQTT and automatic time), fill in `wifi.sta`, save, reboot.

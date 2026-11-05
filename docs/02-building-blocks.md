@@ -59,6 +59,16 @@ The file defines a shared block and one *environment* per target.
 | `CC_FORCE_SIMULATION` | sensors are always simulated, whatever the config says (`*_sim` and `wokwi` environments) |
 | `CC_WOKWI` | ignores the WiFi settings: access point off, joins the open `Wokwi-GUEST` network |
 | `CONFIG_IDF_TARGET_ESP32S3` | set by the toolchain; selects `Chip::Esp32S3` for pin rules and default pins |
+| `CC_DEFAULT_AP_PASSWORD`, `CC_DEFAULT_WEB_PASSWORD` | factory passwords, see below |
+
+**Factory passwords from `.env`:** the default access-point and web passwords are not in git. The
+pre-build script `tools/env_defaults.py` (registered in `[env]`, so it runs for every environment,
+including `native`) reads them from `.env` in the project folder (git-ignored; template:
+`.env.example`), or from environment variables of the same name, which take precedence (for CI). It
+passes them to the compiler as string defines that `Config.h` uses as defaults. The build fails with
+an explanation if they are missing or the access-point password is not 8–63 characters, and `Config.h`
+has an `#error` as a second guard. The values only matter for a controller without a stored
+`/config.json`; reflashing does not change the passwords of an already configured device.
 
 The `native` environment compiles `lib/core` and `test/` with the PC's compiler (`-Wall`) and runs the
 Unity test framework.
@@ -602,10 +612,10 @@ Examples with `curl` while connected to the access point:
 
 ```bash
 curl http://192.168.4.1/api/status
-curl -u admin:pilzezucht -d name=light -d mode=on -d minutes=15 http://192.168.4.1/api/output
-curl -u admin:pilzezucht -H "Content-Type: application/json" \
+curl -u admin:<web password> -d name=light -d mode=on -d minutes=15 http://192.168.4.1/api/output
+curl -u admin:<web password> -H "Content-Type: application/json" \
      -d '{"overrideTimeoutS": 1800}' http://192.168.4.1/api/config
-curl -u admin:pilzezucht -F "firmware=@.pio/build/esp32s3/firmware.bin" http://192.168.4.1/update
+curl -u admin:<web password> -F "firmware=@.pio/build/esp32s3/firmware.bin" http://192.168.4.1/update
 ```
 
 **Over-the-air update:** the upload handler checks the login on the first chunk, then streams the
@@ -725,9 +735,9 @@ restart.
 | `device.name` | string, `climacontrol` | hostname, mDNS, MQTT client id. Reboot. |
 | `wifi.ap.enabled` | bool, `true` | own access point. Reboot. |
 | `wifi.ap.ssid` | `ClimaControl` | Reboot. |
-| `wifi.ap.password` | `pilzezucht` | 8–63 characters, masked. **Change it.** Reboot. |
+| `wifi.ap.password` | `CC_DEFAULT_AP_PASSWORD` from `.env` | 8–63 characters, masked. **Change it.** Reboot. |
 | `wifi.sta.ssid` / `.password` | empty | farm WiFi. Reboot. |
-| `web.user` / `web.password` | `admin` / `pilzezucht` | login for all changes. **Change it.** |
+| `web.user` / `web.password` | `admin` / `CC_DEFAULT_WEB_PASSWORD` from `.env` | login for all changes. **Change it.** |
 | `mqtt.enabled` | `false` | Reboot. |
 | `mqtt.host` / `.port` | empty / 1883 | Reboot. |
 | `mqtt.user` / `.password` | empty | Reboot. |
