@@ -1,0 +1,13 @@
+# Who may read (subscribe) and write (publish) which MQTT topics. Anything not listed is denied.
+
+# The controller: publishes its data and receives commands under wildnis/
+user climacontrol
+topic readwrite wildnis/#
+
+# Data collector: read only, so it can never send a command
+user telegraf
+topic read wildnis/#
+
+# Manual tests: may read and send commands
+user tester
+topic readwrite wildnis/#

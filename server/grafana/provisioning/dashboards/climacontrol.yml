@@ -1,0 +1,9 @@
+# Loads every dashboard JSON file from server/grafana/dashboards at startup.
+apiVersion: 1
+providers:
+  - name: climacontrol
+    folder: ClimaControl
+    type: file
+    allowUiUpdates: true   # editable in the UI; export the JSON back into the repo to keep changes
+    options:
+      path: /var/lib/grafana/dashboards

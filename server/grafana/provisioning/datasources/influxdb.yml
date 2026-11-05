@@ -1,0 +1,15 @@
+# Grafana reads this at startup and creates the InfluxDB connection automatically.
+apiVersion: 1
+datasources:
+  - name: InfluxDB
+    uid: influxdb
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: true
+    jsonData:
+      version: Flux
+      organization: wildnis
+      defaultBucket: climacontrol
+    secureJsonData:
+      token: $INFLUX_TOKEN

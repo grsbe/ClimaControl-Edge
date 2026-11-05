@@ -5,3 +5,5 @@
 .vscode/ipch
 site/
 .env
+server/passwd
+server/test-credentials.txt

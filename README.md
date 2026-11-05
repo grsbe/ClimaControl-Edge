@@ -170,12 +170,22 @@ Topics are documented at the top of `src/Mqtt.h`. In short, with the default bas
 - `.../cmd/output/humidifier` with `on`, `off`, `auto`, a level like `0.5`, or `{"mode":"on","minutes":30}`
 - `.../cmd/config` with a JSON snippet, e.g. `{"outputs":[...]}`; the answer arrives on `.../result`
 
-`server/docker-compose.yml` starts a test broker on your PC.
+## Server (prototype)
+
+`server/` holds a Docker Compose stack: MQTT broker → Telegraf → InfluxDB → Grafana dashboards.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server\setup.ps1   # once: creates the secrets in server\.env
+cd server; docker compose up -d                            # Grafana at http://localhost:3000 (user admin)
+```
+
+Details are in the documentation (Part 2, section 16.2).
 
 ## Not done yet
 
+- **Alerting**: the server does not yet notify anyone when the controller goes offline or a critical alarm appears
+- The server stack runs as a prototype on a PC; not yet deployed on a permanent server
 - Grid sync input (zero-cross), CAN bus, LCD + keys from the block diagram
 - BME680 air-quality index (needs Bosch's proprietary BSEC library; raw gas resistance is reported)
 - TLS for MQTT (fine on a local network or VPN for now)
-- Server side: storing history and dashboards (e.g. Mosquitto + Node-RED or Telegraf + InfluxDB + Grafana)
 - Real pin assignment and setpoints

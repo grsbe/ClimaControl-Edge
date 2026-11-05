@@ -26,7 +26,7 @@ handling** and **where it is tested**. File references are relative to the repos
 16. [Mqtt – server connection](#16-mqtt)
 17. [StatusJson and main.cpp](#17-statusjson-and-maincpp)
 18. [Unit tests](#18-unit-tests)
-19. [Tools: Docker build, test broker, Wokwi](#19-tools)
+19. [Tools: Docker build, server stack, Wokwi](#19-tools)
 20. [Reference: configuration keys](#20-reference-configuration-keys)
 21. [Reference: status JSON, alarm codes, reason strings](#21-reference-status-json-alarm-codes-reason-strings)
 
@@ -667,16 +667,80 @@ Only active when `mqtt.enabled` is true **and** the station is connected. Reconn
 **Do not send commands as retained messages.** The device would execute them again after every
 reconnect.
 
-### 16.2 Test broker
+### 16.2 Server stack (prototype)
 
-```bash
-cd server && docker compose up -d
-docker exec -it climacontrol-mqtt mosquitto_sub -v -t "wildnis/#"
-docker exec -it climacontrol-mqtt mosquitto_pub -t wildnis/climacontrol/cmd/output/light -m on
+`server/` contains a Docker Compose stack that receives, stores and displays the controller's data.
+It runs on any machine with Docker: a PC for development, later e.g. a Raspberry Pi or a mini PC at
+the farm.
+
+```
+ controller ──MQTT──► Mosquitto ──► Telegraf ──► InfluxDB ──► Grafana  (http://localhost:3000)
+                      broker        collector    database      dashboards
+                      :1883         read-only                 
 ```
 
-Then configure the device: `{"mqtt":{"enabled":true,"host":"<PC IP>"},"wifi":{"sta":{"ssid":"...","password":"..."}}}`
-and reboot. The test broker allows anonymous access; add users before real use.
+| Service | Image | Role | Reachable from |
+|---------|-------|------|----------------|
+| `mqtt` | `eclipse-mosquitto:2.0.20` | broker; login required; per-user topic rights (`mosquitto.acl`) | network, port 1883 (the controller must connect) |
+| `telegraf` | `telegraf:1.33.1` | subscribes to the controller's topics and writes them to InfluxDB (`telegraf.conf`) | nowhere (no ports) |
+| `influxdb` | `influxdb:2.7.11` | time-series database, org `wildnis`, bucket `climacontrol`, keeps data forever | this computer only (`127.0.0.1:8086`) |
+| `grafana` | `grafana/grafana-oss:11.4.0` | dashboards; data source and dashboard are provisioned from `server/grafana/` | this computer only (`127.0.0.1:3000`) |
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server\setup.ps1   # once: creates all secrets
+cd server; docker compose up -d                            # start
+docker compose down                                        # stop, data kept
+docker compose down -v                                     # stop and DELETE all data
+```
+
+**Secrets:** `setup.ps1` creates random passwords and tokens in `server/.env` and the hashed MQTT
+logins in `server/passwd`. Both are git-ignored, and running the script again keeps existing values.
+`docker-compose.yml` passes each container only the secrets it needs.
+
+**MQTT logins and rights** (`mosquitto.acl`):
+
+| User | Rights | Used by |
+|------|--------|---------|
+| `climacontrol` | read + write `wildnis/#` | the controller (`MQTT_CONTROLLER_PASSWORD`) |
+| `telegraf` | **read only** `wildnis/#` | the data collector: it can never send a command |
+| `tester` | read + write `wildnis/#` | manual tests with `mosquitto_sub` / `mosquitto_pub` |
+
+**Stored data** (InfluxDB measurements):
+
+| Measurement | Tags | Fields | Source |
+|-------------|------|--------|--------|
+| `signal` | `device`, `signal` | `value` | `<base>/signal/<signal>` |
+| `availability` | `device` | `value` (`online`/`offline`) | `<base>/availability` |
+| `output` | `device`, `name` | `level`, `on`, `mode`, `reason` | `outputs` in `<base>/status` |
+| `sensor` | `device`, `id`, `type`, `group` | `ok`, `failures`, `values_<quantity>` | `sensors` in `<base>/status` |
+| `system` | `device` | `uptime_s`, `free_heap`, `min_free_heap`, `wifi_rssi`, `alarms`, `critical_alarms` | `<base>/status` |
+
+**Dashboard** `ClimaControl` (Grafana home page): connection state, critical and all alarms, time since
+the last data; chamber temperature, humidity and CO₂; a timeline of all outputs; the redundant chamber
+sensors side by side, to spot a drifting sensor; and WiFi signal, free memory and uptime (a drop means
+the controller restarted). Changes made in the Grafana UI are kept in Grafana's own storage. To keep
+them in the repository, export the dashboard JSON to `server/grafana/dashboards/climacontrol.json`.
+
+**Not implemented yet:**
+- **Alerting.** Nobody is notified yet when the controller goes offline or a critical alarm appears.
+  This is the most important missing piece for a critical system. Grafana can send alerts (e-mail,
+  Telegram, push and so on) once a notification channel is chosen.
+- TLS for MQTT, and running the stack on its final host.
+
+**Connecting the controller:** set this in its configuration, then reboot:
+`{"wifi":{"sta":{"ssid":"...","password":"..."}},"mqtt":{"enabled":true,"host":"<server IP>","user":"climacontrol","password":"<MQTT_CONTROLLER_PASSWORD>"}}`.
+
+On Windows, other devices can only reach the broker if the firewall allows TCP port 1883. Limit the
+rule to the controller's address and remove it after testing:
+
+```powershell
+# in an administrator terminal
+New-NetFirewallRule -DisplayName "ClimaControl test MQTT" -Direction Inbound -Protocol TCP -LocalPort 1883 -RemoteAddress <controller IP> -Action Allow
+Remove-NetFirewallRule -DisplayName "ClimaControl test MQTT"
+```
+
+There is no TLS yet, so logins travel unencrypted on the local network. Use the stack on a trusted
+network only.
 
 ---
 
@@ -719,7 +783,7 @@ chosen times.
 |------|---------|
 | `tools/Dockerfile` | `python:3.12-bookworm` + PlatformIO 6 |
 | `tools/pio.ps1` | builds the image `climacontrol-pio` once, then runs `pio <args>` in it with the project mounted at `/work` and a cache volume `climacontrol-pio-cache`. Building and tests work; flashing needs USB and is done from VS Code. |
-| `server/docker-compose.yml`, `mosquitto.conf` | test MQTT broker `eclipse-mosquitto:2.0.20` on port 1883, anonymous, persistent |
+| `server/` | server stack prototype: broker, Telegraf, InfluxDB, Grafana (see [16.2](#162-server-stack-prototype)); `setup.ps1` creates its secrets |
 | `wokwi.toml` | runs `.pio/build/wokwi/firmware.bin` in the Wokwi simulator and forwards `localhost:8180` to the simulated device's port 80 |
 | `diagram.json` | Wokwi wiring: ESP32-S3 DevKitC-1 with 8 LEDs on GPIO 4, 5, 6, 7, 15, 16, 17, 18 (the default outputs) |
 

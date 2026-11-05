@@ -1,13 +1,19 @@
-# Minimal MQTT broker for testing the controller on your PC:
-#   cd server && docker compose up -d
-# Then set mqtt.host in the controller config to your PC's IP address.
-# Watch everything the controller sends:
-#   docker exec -it climacontrol-mqtt mosquitto_sub -v -t "wildnis/#"
-# Switch an output:
-#   docker exec -it climacontrol-mqtt mosquitto_pub -t wildnis/climacontrol/cmd/output/light -m on
+# ClimaControl server stack (prototype): MQTT broker -> Telegraf -> InfluxDB -> Grafana.
+# Runs on any machine with Docker: a PC now, later e.g. a Raspberry Pi or a mini PC at the farm.
 #
-# This broker accepts anyone on your network. Before using it for real, add users
-# (mosquitto_passwd) and set allow_anonymous false in mosquitto.conf.
+#   powershell -ExecutionPolicy Bypass -File server\setup.ps1   once: creates server\.env + server\passwd
+#   cd server; docker compose up -d                            start everything
+#   http://localhost:3000                                      Grafana (user admin, GRAFANA_ADMIN_PASSWORD)
+#   docker compose down                                        stop (data is kept)
+#   docker compose down -v                                     stop and DELETE all stored data
+#
+# Only the broker (1883) is reachable from other devices, because the controller must connect to it.
+# Grafana and InfluxDB listen on 127.0.0.1 only: reachable from this computer, not from the network.
+#
+# Manual MQTT test (MQTT_TESTER_PASSWORD from .env; never send commands with -r / retained):
+#   docker exec -it climacontrol-mqtt mosquitto_sub -u tester -P <password> -v -t "wildnis/#"
+#   docker exec -it climacontrol-mqtt mosquitto_pub -u tester -P <password> -t wildnis/climacontrol/cmd/output/light -m on
+
 services:
   mqtt:
     image: eclipse-mosquitto:2.0.20
@@ -17,7 +23,62 @@ services:
       - "1883:1883"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto.acl:/mosquitto/config/mosquitto.acl:ro
+      - ./passwd:/mosquitto/config/passwd:ro
       - mosquitto-data:/mosquitto/data
+
+  influxdb:
+    image: influxdb:2.7.11
+    container_name: climacontrol-influxdb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:?run setup.ps1 first}
+      DOCKER_INFLUXDB_INIT_ORG: wildnis
+      DOCKER_INFLUXDB_INIT_BUCKET: climacontrol
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:?run setup.ps1 first}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+
+  telegraf:
+    image: telegraf:1.33.1
+    container_name: climacontrol-telegraf
+    restart: unless-stopped
+    depends_on: [mqtt, influxdb]
+    environment:
+      INFLUX_TOKEN: ${INFLUX_TOKEN:?run setup.ps1 first}
+      MQTT_TELEGRAF_PASSWORD: ${MQTT_TELEGRAF_PASSWORD:?run setup.ps1 first}
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+
+  grafana:
+    image: grafana/grafana-oss:11.4.0
+    container_name: climacontrol-grafana
+    restart: unless-stopped
+    depends_on: [influxdb]
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run setup.ps1 first}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/climacontrol.json
+      INFLUX_TOKEN: ${INFLUX_TOKEN:?run setup.ps1 first}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
 
 volumes:
   mosquitto-data:
+  influxdb-data:
+  influxdb-config:
+  grafana-data:

@@ -310,7 +310,7 @@ wildnismanufaktur-edge/
 ├── lib/core/src/         hardware-independent logic (Part 2, sections 3–10)
 ├── src/                  ESP32 code (Part 2, sections 11–17)
 ├── test/test_core/       unit tests for lib/core
-├── server/               test MQTT broker (Docker Compose + Mosquitto config)
+├── server/               server stack prototype: MQTT broker, Telegraf, InfluxDB, Grafana (Docker Compose)
 ├── tools/                Dockerfile + pio.ps1: build and test with only Docker installed
 ├── wokwi.toml            Wokwi simulator settings
 ├── diagram.json          Wokwi virtual wiring: ESP32-S3 + 8 LEDs as outputs
@@ -354,7 +354,8 @@ production.
 | Battery-backed real-time clock | **not implemented yet**; the clock comes from NTP or the web UI |
 | BME680 air-quality index (needs Bosch's BSEC library) | **not implemented yet**; the raw gas resistance is reported |
 | MQTT over TLS | **not implemented yet**; use a trusted network or VPN |
-| Server side (history, dashboards, alerting) | **not started yet**; `server/` only holds a test broker |
+| Server: storing history, dashboards | prototype in `server/` (Telegraf + InfluxDB + Grafana), runs on a PC; **not yet deployed on a permanent server** |
+| Server: alerting a person (controller offline, critical alarm) | **not implemented yet** |
 
 ### Glossary (short)
 
